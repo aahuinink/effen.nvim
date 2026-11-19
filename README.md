@@ -3,8 +3,10 @@
 *eff-en*, as in **F N**: function new.
 
 Write a call to a function that doesn't exist yet, put the cursor on its name, and
-let effen generate the prototype, the declaration and a definition stub.
-Declarations stay in sync when you change the definition.
+let effen generate the prototype, the declaration and a definition stub. Or
+select some code and let effen wrap it into a new function, replacing copies of
+it in the file or the whole project. Declarations stay in sync when you change
+the definition.
 
 C and C++ are supported (also objc/objcpp/cuda via the C/C++ backends); the
 language layer is pluggable.
@@ -13,7 +15,7 @@ language layer is pluggable.
 int main(void) {
   int count = 3;
   char buf[64];
-  double ratio = compute(count, buf, 2.5f);   // cursor on `compute`, <leader>fn
+  double ratio = compute(count, buf, 2.5f);   // cursor on `compute`, <leader>fnn
 }
 ```
 
@@ -46,14 +48,17 @@ double compute(int count, char *buf, float arg3)
 
 ## Keys
 
-| Keys | Action |
-| --- | --- |
-| `<leader>fn` | **new**: opens an option picker (below) |
-| `<leader>fe` | **existing**: go to the definition of the function under the cursor (LSP goto definition), leaving the return marker |
-| `<leader>fr` | **return** to the marker set by *new* / *existing*, then delete the marker |
-| `<leader>fu` | **update** the declaration of the definition under the cursor (does nothing outside a definition) |
+All keys live under `<leader>fn`:
 
-After `<leader>fn`, a small float shows toggles. Toggle keys don't run anything;
+| Keys | Command | Action |
+| --- | --- | --- |
+| `<leader>fnn` | `:EffenNew` | **new**: create the function called under the cursor; opens an option picker (below) |
+| `<leader>fne` | `:EffenEnter` | **enter** the definition of the function under the cursor (LSP goto definition), leaving the return marker |
+| `<leader>fnr` | `:EffenReturn` | **return** to the marker set by *new* / *enter* / *wrap*, then delete the marker |
+| `<leader>fnu` | `:EffenUpdate` | **update** the declaration of the definition under the cursor (does nothing outside a definition) |
+| `<leader>fnw` (visual) | `:'<,'>EffenWrap` | **wrap** the selected code into a new function (below) |
+
+After `<leader>fnn`, a small float shows toggles. Toggle keys don't run anything;
 an action key does:
 
 | Key | Toggle / action |
@@ -70,11 +75,11 @@ Without `h`, a forward declaration is inserted below the `#include` block of the
 current file, so C doesn't complain about an implicit declaration.
 
 Before jumping, a global mark (`F` by default) is placed on the call so
-`<leader>fr` brings you back.
+`<leader>fnr` brings you back.
 
-### Existing functions
+### Entering existing functions
 
-`<leader>fe` is the same round trip for a function that already exists. It asks
+`<leader>fne` is the same round trip for a function that already exists. It asks
 the LSP for the definition, then shows a one-line view picker. Each key acts
 immediately because there is nothing to toggle:
 
@@ -84,9 +89,55 @@ immediately because there is nothing to toggle:
 | `\|` / `_` / `f` | vertical split / horizontal split / floating window |
 | `<Esc>` / `q` | cancel |
 
-The marker is placed, so `<leader>fr` returns (closing the float if you used
+The marker is placed, so `<leader>fnr` returns (closing the float if you used
 `f`). If the LSP returns several definitions you get a `vim.ui.select` list.
-If the LSP finds no definition, it says so; use `<leader>fn` to create one.
+If the LSP finds no definition, it says so; use `<leader>fnn` to create one.
+
+### Wrapping code into a function
+
+Select code inside a function body (`v` for an expression or statements, `V`
+for whole lines) and press `<leader>fnw`:
+
+1. The same option picker as *new* (`m`, `h`, `|`/`_`/`f`, `l`, then `a`/`<CR>`
+   or `n`) decides where the declaration and the definition go.
+2. A prototype prompt opens with the deduced signature. The name
+   (`extracted`) is selected, so you just type the new name; `<Tab>` then jumps
+   to any `TYPE` placeholders. Edit the return type and parameters freely:
+   renamed parameters are renamed in the body too.
+3. The selection is replaced by the call, the definition is created with the
+   selected code as its body, and the declaration is added.
+4. A last picker asks what to do with **copies** of the code: `f` replaces them
+   in this file, `p` in every C/C++ file of the project (git files, or the
+   files under the nearest `Makefile`/`CMakeLists.txt`/`compile_commands.json`
+   directory), `n`/`<Esc>` leaves them. Replaced copies go to the quickfix list
+   (`:copen` to review).
+
+What effen works out from the selection:
+
+| Selection | Becomes |
+| --- | --- |
+| an expression: `a * b + 1` | `int mad(int a, int b) { return a * b + 1; }`, call `mad(a, b)` |
+| statements | a `void` function, call `name(args);` |
+| statements declaring a variable used after them | that variable is returned: `int sq = name(args);` |
+| statements ending in `return x;` | returns the enclosing function's type: `return name(args);` |
+
+Parameters are the local variables and parameters of the enclosing function
+that the selection uses (globals, functions and macros are left alone). With an
+LSP this uses goto-definition; without one, declarations are found textually.
+A variable the selection assigns, increments, takes the address of (or, in
+C++, calls a method on) is passed as a pointer in C (`int *total`, the body uses
+`(*total)` / `p->field`, the call passes `&total`) and as a reference in C++.
+
+Copies match token for token, ignoring whitespace and comments, with variables
+allowed to have different names (`b * a + 1` is a copy of `a * b + 1` and
+becomes `mad(b, a)`). An expression copy must be a whole subexpression
+(`2 * a * b + 1` is not replaced), statement copies must start at a statement
+boundary, and a variable the copy declares must not be used after it. Copies in
+other files get the `#include` of the header (with `h`) or a forward
+declaration; a `static` function is not used from other files.
+
+You are warned when the selection has an early `return`, a `break`/`continue`
+for a loop outside it, or several variables that would need returning.
 
 ### Prompts
 
@@ -137,25 +188,27 @@ arguments, `extern` and namespace qualification on the declaration are kept.
 Other files that get updated are written if they had no unsaved changes;
 otherwise they are left modified and you get a warning.
 
-`<leader>fu` does the same for the definition under the cursor on demand.
+`<leader>fnu` does the same for the definition under the cursor on demand.
 
 ## Commands
 
-- `:EffenNew [keys]`: like `<leader>fn`; with keys (e.g. `:EffenNew h|a`) the picker is skipped
-- `:EffenExisting [here|vsplit|split|float]`: like `<leader>fe`; with an argument the picker is skipped
-- `:EffenReturn`
-- `:EffenUpdate`
+- `:EffenNew [keys]`: like `<leader>fnn`; with keys (e.g. `:EffenNew h|a`) the picker is skipped
+- `:EffenEnter [here|vsplit|split|float]`: like `<leader>fne`; with an argument the picker is skipped
+- `:EffenReturn`: like `<leader>fnr`
+- `:EffenUpdate`: like `<leader>fnu`
+- `:'<,'>EffenWrap [keys]`: like `<leader>fnw`; a plain line range (`:10,14EffenWrap`) wraps whole lines
 - `:checkhealth effen`
 
 ## Configuration
 
 ```lua
 require("effen").setup({
-  prefix = "<leader>f",                        -- false: no keymaps
-  keys = { new = "n", existing = "e", ret = "r", update = "u" }, -- false disables one
-  marker = "F",                                -- global mark used by new/existing/return
+  prefix = "<leader>fn",                       -- false: no keymaps
+  keys = { new = "n", enter = "e", ret = "r", update = "u", wrap = "w" }, -- false disables one
+  marker = "F",                                -- global mark used by new/enter/wrap/return
   auto_update = true,                          -- sync declarations on save
   unknown_type = "TYPE",                       -- placeholder for undeduced types
+  wrap_name = "extracted",                     -- default name in the wrap prompt
   lsp_timeout = 1000,                          -- ms per hover request
   brace_newline = true,                        -- `{` on its own line
   header_guard = "ifndef",                     -- or "pragma"
@@ -166,9 +219,12 @@ require("effen").setup({
 })
 ```
 
-Lua API: `require("effen").new(opts)`, `.existing({ view = "vsplit" })`, `.ret()`, `.update()`.
+Lua API: `require("effen").new(opts)`, `.enter({ view = "vsplit" })`, `.ret()`, `.update()`,
+`.wrap(opts)`.
 `new` accepts `{ keys = "h|a", prototype = "...", confirm = false, header = path, source = path }`
-to skip any of the prompts.
+to skip any of the prompts. `wrap` accepts `keys`, `prototype`, `header`, `source`,
+`replace = "file"|"project"|"none"` and `region = { srow, scol, erow, ecol, linewise }`
+(0-based, `ecol` exclusive; default: the last visual selection).
 
 ## Adding a language
 
@@ -176,12 +232,15 @@ A backend is a table implementing the interface documented at the top of
 `lua/effen/lang/c_family.lua` (parse the call, deduce a signature, format
 prototypes, find definitions/declarations, insert into files). Register it with
 `languages = { rust = require("my.backend") }` or
-`require("effen.lang").register(ft, backend)`.
+`require("effen.lang").register(ft, backend)`. The `wrap_*` functions are
+optional; without them `wrap` reports the filetype as unsupported.
 
 ## Limitations (v1)
 
 - Free functions only: calls like `obj.method()` / `p->method()` are rejected
-  (no member function generation yet).
+  (no member function generation yet). Wrapping code inside a C++ method that
+  uses members (`x` meaning `this->x`) produces a free function that can't see
+  them.
 - Source scanning is heuristic (comments/strings/brackets aware, no full
   parser). Unusual macro-heavy code can confuse it.
 - If the function is already declared somewhere, *new* refuses rather than

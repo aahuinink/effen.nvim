@@ -268,4 +268,116 @@ function M.top_ops(s)
   return ops
 end
 
+local function op_at(s, i)
+  for _, cand in ipairs(OPS) do
+    if s:sub(i, i + #cand - 1) == cand then
+      return cand
+    end
+  end
+  return s:sub(i, i)
+end
+
+--- Splits `s` into tokens, skipping whitespace and comments. Each token is
+--- { t = text, k = kind, i = first index, j = last index } with kind one of
+--- "id", "num", "str" (string/char literal), "pp" (a whole preprocessor
+--- line) or "op".
+function M.tokens(s)
+  local toks = {}
+  local i, n = 1, #s
+  local line_start = true
+  local function add(k, a, b)
+    toks[#toks + 1] = { t = s:sub(a, b), k = k, i = a, j = b }
+  end
+  while i <= n do
+    local c = s:sub(i, i)
+    if c == "\n" then
+      line_start = true
+      i = i + 1
+    elseif c:match("%s") then
+      i = i + 1
+    elseif c == "#" and line_start then
+      local j = i
+      while true do
+        local e = s:find("\n", j, true)
+        if not e then
+          j = n
+          break
+        end
+        if s:sub(e - 1, e - 1) == "\\" then
+          j = e + 1
+        else
+          j = e - 1
+          break
+        end
+      end
+      add("pp", i, j)
+      toks[#toks].t = vim.trim(toks[#toks].t)
+      i = j + 1
+    else
+      line_start = false
+      local kind, j = M.skip_special(s, i)
+      if kind == "comment" then
+        i = j
+      elseif kind == "string" then
+        add("str", i, j - 1)
+        i = j
+      elseif c:match("[%a_]") then
+        local e = (s:find("[^%w_]", i) or (n + 1)) - 1
+        local nx = s:sub(e + 1, e + 1)
+        local k2, j2
+        if (nx == '"' or nx == "'") and s:sub(i, e):match("^[LuU]?8?R?$") then
+          k2, j2 = M.skip_special(s, e + 1) -- prefixed literal: L"..", u8R"(..)"
+        end
+        if k2 == "string" then
+          add("str", i, j2 - 1)
+          i = j2
+        else
+          add("id", i, e)
+          i = e + 1
+        end
+      elseif c:match("%d") or (c == "." and s:sub(i + 1, i + 1):match("%d")) then
+        local k = i
+        while k <= n do
+          local ch = s:sub(k, k)
+          if ch:match("[%w_.']") then
+            k = k + 1
+          elseif (ch == "+" or ch == "-") and s:sub(k - 1, k - 1):match("[eEpP]") then
+            k = k + 1
+          else
+            break
+          end
+        end
+        add("num", i, k - 1)
+        i = k
+      else
+        local op = op_at(s, i)
+        add("op", i, i + #op - 1)
+        i = i + #op
+      end
+    end
+  end
+  return toks
+end
+
+local TOK_OPEN = { ["("] = ")", ["["] = "]", ["{"] = "}" }
+
+--- Index of the token closing the bracket token at `k`, or nil.
+function M.token_match(toks, k)
+  local stack = {}
+  for m = k, #toks do
+    local t = toks[m].t
+    if TOK_OPEN[t] then
+      stack[#stack + 1] = TOK_OPEN[t]
+    elseif t == ")" or t == "]" or t == "}" then
+      if stack[#stack] ~= t then
+        return nil
+      end
+      stack[#stack] = nil
+      if #stack == 0 then
+        return m
+      end
+    end
+  end
+end
+
 return M

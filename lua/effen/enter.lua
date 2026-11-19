@@ -1,4 +1,4 @@
--- `existing`: jump to the definition of an existing function (LSP goto
+-- `enter`: jump into the definition of an existing function (LSP goto
 -- definition) with the same marker and view options as `new`.
 local M = {}
 
@@ -30,7 +30,7 @@ function M.run(opts)
   end
   local locs = lsp.locations(buf, "textDocument/definition", from.row, from.col)
   if #locs == 0 then
-    return util.warn("no definition found for `" .. word .. "` (use new to create it)")
+    return util.warn("no definition found for `" .. word .. "` (use EffenNew to create it)")
   end
 
   local function go(view)

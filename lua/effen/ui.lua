@@ -9,7 +9,10 @@ local function border()
 end
 
 --- Rename-style floating input.
----@param opts { title: string, default?: string, cursor?: "start"|"end", placeholder?: string }
+--- `select`: text to select initially (e.g. a default name, typing replaces
+--- it); otherwise the first `placeholder` is selected. <Tab> jumps between
+--- placeholders.
+---@param opts { title: string, default?: string, cursor?: "start"|"end", placeholder?: string, select?: string }
 ---@param on_done fun(value: string|nil)
 function M.input(opts, on_done)
   local default = opts.default or ""
@@ -73,11 +76,12 @@ function M.input(opts, on_done)
   end)
 
   local ph = opts.placeholder
-  local function select_keys(col1)
-    -- `col1` is the 1-based column where the placeholder starts
+  local function select_keys(col1, len)
+    -- selects `len` bytes starting at the 1-based column `col1`
+    len = len or #ph
     local keys = "<Esc><Cmd>call cursor(1," .. col1 .. ")<CR>v"
-    if #ph > 1 then
-      keys = keys .. (#ph - 1) .. "l"
+    if len > 1 then
+      keys = keys .. (len - 1) .. "l"
     end
     return keys .. "<C-g>"
   end
@@ -109,13 +113,19 @@ function M.input(opts, on_done)
     end,
   })
 
-  local first = ph and ph ~= "" and default:find(ph, 1, true)
+  local first, len = ph and ph ~= "" and default:find(ph, 1, true), nil
+  if opts.select and opts.select ~= "" then
+    local s = default:find(opts.select, 1, true)
+    if s then
+      first, len = s, #opts.select
+    end
+  end
   if opts.cursor == "start" then
     api.nvim_win_set_cursor(win, { 1, 0 })
     vim.cmd("startinsert")
   elseif first then
     api.nvim_win_set_cursor(win, { 1, first - 1 })
-    local keys = select_keys(first):gsub("^<Esc>", "")
+    local keys = select_keys(first, len):gsub("^<Esc>", "")
     api.nvim_feedkeys(api.nvim_replace_termcodes(keys, true, false, true), "n", false)
   else
     vim.cmd("startinsert!")
@@ -228,11 +238,12 @@ local function run_picker(title, lines_fn, handle)
   return result
 end
 
---- Shows the `new` option picker and blocks until an action is chosen.
+--- Shows the `new`/`wrap` option picker and blocks until an action is chosen.
 ---@param on_done fun(flags: table|nil)
-function M.pick_flags(on_done)
+---@param title? string
+function M.pick_flags(on_done, title)
   local flags = {}
-  local result = run_picker("effen: new", function()
+  local result = run_picker(title or "effen: new", function()
     return picker_lines(flags)
   end, function(key)
     local action = M.apply_key(flags, key)
@@ -259,6 +270,26 @@ function M.pick_view(title, on_done)
     return M.VIEW_KEYS[key]
   end)
   on_done(result)
+end
+
+--- Asks where to replace copies of wrapped code (used by `wrap`).
+---@param count integer copies found in the current file
+---@param on_done fun(scope: "file"|"project"|nil)
+function M.pick_scope(title, count, on_done)
+  local found = count == 1 and "1 copy" or (count .. " copies")
+  local result = run_picker(title, function()
+    return {
+      " f  replace copies in this file (" .. found .. ")",
+      " p  replace copies in the whole project",
+      " n/<Esc> leave them",
+    }
+  end, function(key)
+    if key == "n" then
+      return false
+    end
+    return ({ f = "file", p = "project" })[key]
+  end)
+  on_done(result or nil)
 end
 
 --- Opens `buf` at (row, col) using `view` ("vsplit", "split", "float", nil).

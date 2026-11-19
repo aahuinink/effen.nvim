@@ -6,4 +6,5 @@ return require("effen.lang.c_family").new({
   bool_type = "bool",
   empty_params = "",
   null_type = "void *",
+  references = true,
 })

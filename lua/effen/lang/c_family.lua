@@ -18,6 +18,8 @@
 --   insert_forward_declaration(buf, text)
 --   ensure_include(buf, header_path)
 --   includes(lines, dir)                 -> absolute paths of local includes
+--   extensions()                         -> file extensions of the language
+--   wrap_analyze / wrap_build / wrap_find      (see lang/c_wrap.lua)
 local lex = require("effen.lang.c_lex")
 local util = require("effen.util")
 
@@ -85,6 +87,7 @@ local STORAGE = {
 }
 
 local CONTROL = { ["if"] = true, ["while"] = true, ["for"] = true, ["switch"] = true }
+F.TYPE_WORDS, F.STORAGE = TYPE_WORDS, STORAGE
 
 local KEYWORDS = {
   ["return"] = true,
@@ -168,6 +171,7 @@ local function join_type_name(t, name)
   end
   return t .. " " .. name
 end
+F.join_type_name = join_type_name
 
 local function strip_storage(prefix)
   local words = {}
@@ -187,6 +191,7 @@ local function strip_storage(prefix)
   end
   return F.pretty_type(t)
 end
+F.strip_storage = strip_storage
 
 --------------------------------------------------------------------------------
 -- Prototype parsing
@@ -547,7 +552,8 @@ end
 --------------------------------------------------------------------------------
 
 ---@param spec table { name, filetypes, header_exts, source_exts, default_header_ext,
----  bool_type, empty_params, null_type }
+---  bool_type, empty_params, null_type, references }
+--- `references`: out-parameters of wrapped code become `T &` (else `T *`).
 function F.new(spec)
   local L = setmetatable({ name = spec.name }, { __index = F })
   local config = function()
@@ -587,6 +593,10 @@ function F.new(spec)
       ext = spec.source_exts[1]
     end
     return vim.fs.joinpath(vim.fs.dirname(path), fname .. "." .. ext)
+  end
+
+  function L.extensions()
+    return vim.list_extend(vim.list_extend({}, spec.source_exts), spec.header_exts)
   end
 
   function L.new_header_lines(path)
@@ -787,17 +797,19 @@ function F.new(spec)
   ------------------------------------------------------------------------------
 
   --- Definition template. Returns lines and the offset of the body line.
-  function L.definition_lines(proto_text, indent)
+  --- `body` (already indented lines) replaces the empty body line.
+  function L.definition_lines(proto_text, indent, body)
     local p = F.parse_proto(proto_text)
     local head = proto_text
     if p then
       local prefix = p.prefix:gsub("^extern%s+", "")
       head = F.render_proto(p, { defaults = false, prefix = prefix })
     end
+    body = body or { indent }
     if config().brace_newline then
-      return { head, "{", indent, "}" }, 2
+      return vim.list_extend({ head, "{" }, vim.list_extend(vim.list_extend({}, body), { "}" })), 2
     end
-    return { head .. " {", indent, "}" }, 1
+    return vim.list_extend({ head .. " {" }, vim.list_extend(vim.list_extend({}, body), { "}" })), 1
   end
 
   ------------------------------------------------------------------------------
@@ -1230,6 +1242,8 @@ function F.new(spec)
     local plist = #ps > 0 and table.concat(ps, ", ") or spec.empty_params
     return join_type_name(sig.ret, sig.name) .. "(" .. plist .. ")"
   end
+
+  require("effen.lang.c_wrap").install(L, F, spec)
 
   return L
 end

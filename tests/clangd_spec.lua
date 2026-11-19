@@ -128,9 +128,9 @@ describe("clangd integration", function()
     end
   end
 
-  it("existing: jumps to the definition in a split and sets the marker", function()
+  it("enter: jumps to the definition in a split and sets the marker", function()
     local call_line = goto_call("compute")
-    ff.existing({ view = "vsplit" })
+    ff.enter({ view = "vsplit" })
     eq(2, #vim.api.nvim_tabpage_list_wins(0))
     local cur = vim.api.nvim_win_get_cursor(0)
     local line = vim.api.nvim_get_current_line()
@@ -141,15 +141,50 @@ describe("clangd integration", function()
     eq(call_line, vim.api.nvim_win_get_cursor(0)[1])
   end)
 
-  it("existing: view picker key opens a float; return closes it", function()
+  it("enter: view picker key opens a float; return closes it", function()
     local call_line = goto_call("compute")
     vim.api.nvim_feedkeys("f", "t", false) -- consumed by the picker
-    ff.existing()
+    ff.enter()
     eq(true, vim.w.effen_float == true)
     eq("double compute(int count, const char *buf, float scale)", vim.api.nvim_get_current_line())
     ff.ret()
     eq(1, #vim.api.nvim_list_wins())
     eq(call_line, vim.api.nvim_win_get_cursor(0)[1])
+  end)
+end)
+
+describe("clangd wrap", function()
+  write("calc.c", {
+    "static int g_scale = 3;",
+    "static int helper(int v) { return v; }",
+    "int calc(int n) {",
+    "  int base = n + 1;",
+    "  long out = helper(base) * g_scale + n;",
+    "  return out;",
+    "}",
+  })
+  vim.cmd("only")
+  vim.cmd("edit " .. dir .. "/calc.c")
+  local cbuf = vim.api.nvim_get_current_buf()
+  vim.lsp.start({ name = "clangd", cmd = { clangd }, root_dir = dir })
+  local up = vim.wait(20000, function()
+    local info = lsp.hover(cbuf, 3, 7)
+    return info ~= nil and info.type == "int"
+  end, 200)
+
+  it("locals become parameters, globals and functions don't; return type from hover", function()
+    eq(true, up)
+    local lang = require("effen.lang").get(cbuf)
+    local env = {
+      hover = function(r, c)
+        return lsp.hover(cbuf, r, c)
+      end,
+      locate = function(r, c)
+        return lsp.locations(cbuf, "textDocument/definition", r, c)
+      end,
+    }
+    local an = assert(lang.wrap_analyze(cbuf, { srow = 4, scol = 13, erow = 4, ecol = 39 }, env))
+    eq("int extracted(int base, int n)", lang.format_prototype(lang.wrap_signature(an, "extracted")))
   end)
 end)
 

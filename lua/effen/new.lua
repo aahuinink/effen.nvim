@@ -53,23 +53,14 @@ end
 ---@field header_path string|nil
 ---@field source_path string|nil
 
----@param ctx ff.NewCtx
-local function execute(ctx)
+--- Inserts the declaration of `ctx.proto` (into the header, or as a forward
+--- declaration) and appends the definition (to the current file or to
+--- `ctx.source_path`). `make_lines(def_buf)` returns the definition lines
+--- and the offset of the body line.
+---@return integer def_buf, integer start 0-based row of the definition, integer body, integer count
+function M.place(ctx, make_lines)
   local buf, lang, flags = ctx.buf, ctx.lang, ctx.flags
-  local p = lang.parse_proto(ctx.proto)
-  if not p then
-    return util.err("could not parse prototype: " .. ctx.proto)
-  end
   local src_path = util.abspath(api.nvim_buf_get_name(buf))
-
-  -- the user renamed the function in the prompt: rename the call too
-  if p.base ~= ctx.call.name then
-    api.nvim_buf_set_text(buf, ctx.call.row, ctx.call.name_col, ctx.call.row, ctx.call.name_end, { p.base })
-  end
-
-  if not flags.later then
-    marker.set(buf, ctx.cursor[1], ctx.cursor[2])
-  end
 
   local decl = lang.declaration_text(ctx.proto)
   if flags.header then
@@ -105,12 +96,35 @@ local function execute(ctx)
     def_buf = buf
   end
 
-  local lines, body = lang.definition_lines(ctx.proto, util.indent_unit(def_buf))
+  local lines, body = make_lines(def_buf)
   local start = append(def_buf, lines)
   if def_buf ~= buf then
     util.save(def_buf)
   end
   sync.track(def_buf, start)
+  return def_buf, start, body, #lines
+end
+
+---@param ctx ff.NewCtx
+local function execute(ctx)
+  local buf, lang, flags = ctx.buf, ctx.lang, ctx.flags
+  local p = lang.parse_proto(ctx.proto)
+  if not p then
+    return util.err("could not parse prototype: " .. ctx.proto)
+  end
+
+  -- the user renamed the function in the prompt: rename the call too
+  if p.base ~= ctx.call.name then
+    api.nvim_buf_set_text(buf, ctx.call.row, ctx.call.name_col, ctx.call.row, ctx.call.name_end, { p.base })
+  end
+
+  if not flags.later then
+    marker.set(buf, ctx.cursor[1], ctx.cursor[2])
+  end
+
+  local def_buf, start, body = M.place(ctx, function(b)
+    return lang.definition_lines(ctx.proto, util.indent_unit(b))
+  end)
 
   if flags.later then
     return util.notify("created " .. p.base)
@@ -119,39 +133,10 @@ local function execute(ctx)
   ui.open(def_buf, start + body, #body_line, flags.view, p.base)
 end
 
---- Prompts for the remaining inputs then executes.
----@param ctx ff.NewCtx
----@param opts table
-local function prompt_and_execute(ctx, opts)
+--- Appends the header / new source file prompts that `ctx.flags` require.
+function M.path_steps(ctx, opts, steps)
   local lang, flags = ctx.lang, ctx.flags
   local src = api.nvim_buf_get_name(ctx.buf)
-
-  local steps = {}
-  steps[#steps + 1] = function(next)
-    if opts.prototype then
-      ctx.proto = opts.prototype
-      return next()
-    end
-    local hover = function(row, col)
-      return lsp.hover(ctx.buf, row, col)
-    end
-    local sig = lang.deduce_signature(ctx.buf, ctx.call, hover)
-    if opts.confirm == false then
-      ctx.proto = lang.format_prototype(sig)
-      return next()
-    end
-    ui.input({
-      title = flags.modifiers and "Prototype (add modifiers)" or "Prototype",
-      default = lang.format_prototype(sig),
-      cursor = flags.modifiers and "start" or "end",
-      placeholder = config().unknown_type,
-    }, function(v)
-      if v then
-        ctx.proto = vim.trim(v):gsub(";%s*$", "")
-        next()
-      end
-    end)
-  end
   if flags.header then
     steps[#steps + 1] = function(next)
       local default = opts.header or lang.default_header(src)
@@ -183,10 +168,14 @@ local function prompt_and_execute(ctx, opts)
       end)
     end
   end
+  return steps
+end
 
+--- Runs `steps` (each `fn(next)`, possibly async) in order, then `final()`.
+function M.run_steps(steps, final)
   local function run(i)
     if i > #steps then
-      local ok, err = pcall(execute, ctx)
+      local ok, err = xpcall(final, debug.traceback)
       if not ok then
         util.err(tostring(err))
       end
@@ -197,6 +186,44 @@ local function prompt_and_execute(ctx, opts)
     end)
   end
   run(1)
+end
+
+--- Prompts for the remaining inputs then executes.
+---@param ctx ff.NewCtx
+---@param opts table
+local function prompt_and_execute(ctx, opts)
+  local lang, flags = ctx.lang, ctx.flags
+
+  local steps = {}
+  steps[#steps + 1] = function(next)
+    if opts.prototype then
+      ctx.proto = opts.prototype
+      return next()
+    end
+    local hover = function(row, col)
+      return lsp.hover(ctx.buf, row, col)
+    end
+    local sig = lang.deduce_signature(ctx.buf, ctx.call, hover)
+    if opts.confirm == false then
+      ctx.proto = lang.format_prototype(sig)
+      return next()
+    end
+    ui.input({
+      title = flags.modifiers and "Prototype (add modifiers)" or "Prototype",
+      default = lang.format_prototype(sig),
+      cursor = flags.modifiers and "start" or "end",
+      placeholder = config().unknown_type,
+    }, function(v)
+      if v then
+        ctx.proto = vim.trim(v):gsub(";%s*$", "")
+        next()
+      end
+    end)
+  end
+  M.path_steps(ctx, opts, steps)
+  M.run_steps(steps, function()
+    execute(ctx)
+  end)
 end
 
 --- Entry point.

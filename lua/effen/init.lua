@@ -1,4 +1,4 @@
--- effen: generate C/C++ functions from undeclared calls.
+-- effen: generate C/C++ functions from undeclared calls, or from selected code.
 local M = {}
 
 local config = require("effen.config")
@@ -7,8 +7,13 @@ function M.new(opts)
   require("effen.new").run(opts)
 end
 
-function M.existing(opts)
-  require("effen.existing").run(opts)
+function M.enter(opts)
+  require("effen.enter").run(opts)
+end
+M.existing = M.enter -- old name
+
+function M.wrap(opts)
+  require("effen.wrap").run(opts)
 end
 
 function M.ret()
@@ -24,16 +29,26 @@ local function set_keymaps(cfg)
     return
   end
   local maps = {
-    { cfg.keys.new, M.new, "Function: new from call" },
-    { cfg.keys.existing, M.existing, "Function: go to definition (with marker)" },
-    { cfg.keys.ret, M.ret, "Function: return to marker" },
-    { cfg.keys.update, M.update, "Function: update declaration" },
+    { "n", cfg.keys.new, M.new, "Function: new from call" },
+    { "n", cfg.keys.enter, M.enter, "Function: enter definition (with marker)" },
+    { "n", cfg.keys.ret, M.ret, "Function: return to marker" },
+    { "n", cfg.keys.update, M.update, "Function: update declaration" },
+    {
+      "x",
+      cfg.keys.wrap,
+      function()
+        -- leave visual mode first so the '< '> marks are set
+        vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
+        M.wrap()
+      end,
+      "Function: wrap selection into a new function",
+    },
   }
   for _, m in ipairs(maps) do
-    if m[1] then
-      vim.keymap.set("n", cfg.prefix .. m[1], function()
-        m[2]()
-      end, { desc = m[3] })
+    if m[2] then
+      vim.keymap.set(m[1], cfg.prefix .. m[2], function()
+        m[3]()
+      end, { desc = m[4] })
     end
   end
 end

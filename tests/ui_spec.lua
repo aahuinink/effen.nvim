@@ -30,7 +30,7 @@ lua("vim.api.nvim_win_set_cursor(0, { 3, 3 })")
 
 describe("ui", function()
   it("picker -> prototype float with selected placeholder -> header prompt", function()
-    input(" fn")
+    input(" fnn")
     eq(
       true,
       lua(
@@ -60,20 +60,20 @@ describe("ui", function()
   it("<Esc> in the picker cancels", function()
     lua("vim.cmd('only'); vim.api.nvim_win_set_cursor(0, { 4, 3 })")
     local before = lua("return vim.api.nvim_buf_line_count(0)")
-    input(" fn")
+    input(" fnn")
     input("<Esc>")
     eq(before, lua("return vim.api.nvim_buf_line_count(0)"))
     eq(1, lua("return #vim.api.nvim_list_wins()"))
   end)
 
   it("return marker goes back", function()
-    input(" fr")
+    input(" fnr")
     eq(5, lua("return vim.fn.line('.')")) -- shifted by `#include` + blank line
   end)
 
   it("[m] modifiers + [f] float view, return closes the float", function()
     lua("vim.api.nvim_buf_set_lines(0, 5, 5, false, { '  reset();' }); vim.api.nvim_win_set_cursor(0, { 6, 3 })")
-    input(" fn")
+    input(" fnn")
     input("m")
     input("f")
     input("<CR>")
@@ -86,9 +86,47 @@ describe("ui", function()
       lua("return vim.api.nvim_buf_get_lines(0, vim.fn.line('.') - 3, vim.fn.line('.') - 2, false)[1]")
     )
     eq(true, vim.tbl_contains(lua("return vim.api.nvim_buf_get_lines(0, 0, -1, false)"), "static void reset(void);"))
-    input(" fr")
+    input(" fnr")
     eq(1, lua("return #vim.api.nvim_list_wins()"))
     eq(8, lua("return vim.fn.line('.')")) -- shifted by the forward declaration
+  end)
+
+  it("wrap: visual selection -> picker -> name pre-selected -> replace copies in file", function()
+    vim.fn.writefile({
+      "int main(void) {",
+      "  int a = 2, b = 3;",
+      "  int x = a * b + 1;",
+      "  int y = b * a + 1;",
+      "  return x + y;",
+      "}",
+    }, dir .. "/wrap.c")
+    lua("vim.cmd('only'); vim.cmd.edit(...); vim.api.nvim_win_set_cursor(0, { 3, 10 })", dir .. "/wrap.c")
+    input("v8l")
+    input(" fnw")
+    input("<CR>") -- append
+    eq("s", lua("return vim.api.nvim_get_mode().mode"))
+    eq("int extracted(int a, int b)", lua("return vim.api.nvim_get_current_line()"))
+    input("mad<CR>")
+    input("f") -- replace copies in this file
+    local ls = lua("return vim.api.nvim_buf_get_lines(0, 0, -1, false)")
+    eq({
+      "int mad(int a, int b);",
+      "",
+      "int main(void) {",
+      "  int a = 2, b = 3;",
+      "  int x = mad(a, b);",
+      "  int y = mad(b, a);",
+      "  return x + y;",
+      "}",
+      "",
+      "int mad(int a, int b)",
+      "{",
+      "\treturn a * b + 1;", -- -u NONE: noexpandtab
+      "}",
+    }, ls)
+    eq(12, lua("return vim.fn.line('.')")) -- in the new body
+    input(" fnr")
+    eq(5, lua("return vim.fn.line('.')"))
   end)
 end)
 
