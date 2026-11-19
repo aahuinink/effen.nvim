@@ -3,7 +3,8 @@
 *eff-en*, as in **F N**: function new.
 
 Write a call to a function that doesn't exist yet, put the cursor on its name, and
-let effen generate the prototype, the declaration and a definition stub. Or
+let effen generate the prototype, the declaration and a definition stub. Or put
+the cursor on a declaration that has no definition yet and get the stub. Or
 select some code and let effen wrap it into a new function, replacing copies of
 it in the file or the whole project. Declarations stay in sync when you change
 the definition.
@@ -52,7 +53,7 @@ All keys live under `<leader>fn`:
 
 | Keys | Command | Action |
 | --- | --- | --- |
-| `<leader>fnn` | `:EffenNew` | **new**: create the function called under the cursor; opens an option picker (below) |
+| `<leader>fnn` | `:EffenNew` | **new**: create the function called (or declared) under the cursor; opens an option picker (below) |
 | `<leader>fne` | `:EffenEnter` | **enter** the definition of the function under the cursor (LSP goto definition), leaving the return marker |
 | `<leader>fnr` | `:EffenReturn` | **return** to the marker set by *new* / *enter* / *wrap*, then delete the marker |
 | `<leader>fnu` | `:EffenUpdate` | **update** the declaration of the definition under the cursor (does nothing outside a definition) |
@@ -76,6 +77,30 @@ current file, so C doesn't complain about an implicit declaration.
 
 Before jumping, a global mark (`F` by default) is placed on the call so
 `<leader>fnr` brings you back.
+
+### From a declaration
+
+When the cursor is anywhere on a top-level function declaration
+(`int area(int w, int);`), `<leader>fnn` creates its **definition** instead.
+Calls inside function bodies always use the call flow above, so effen can tell
+the two apart.
+
+- The prompt shows the definition's prototype: unnamed parameters get names
+  (`int arg2`), default arguments and `extern` are dropped. If you change the
+  types or the name, the declaration is updated to match.
+- `a`/`<CR>` in a **source** file appends the definition to it. In a **header**
+  it appends to the same-named source file (`area.h` → `area.c`), and asks for a
+  path if there isn't one. That file gets the `#include`.
+- `n` puts the definition in a new source file (prompted).
+- `h` on a forward declaration in a source file **moves** it to the header
+  (prompted) and `#include`s the header. In a header, `h` is ignored.
+- `m`, `|`/`_`/`f` and `l` work as for calls. The marker goes on the declaration.
+- If the function already has a definition (same file, the header's source
+  file, or the LSP's goto-definition), effen says where and does nothing.
+
+When effen has to guess a source file extension for a header (`.h` files have
+the `cpp` filetype by default), it uses the one most common among the files
+next to the header.
 
 ### Entering existing functions
 
@@ -243,8 +268,8 @@ optional; without them `wrap` reports the filetype as unsupported.
   them.
 - Source scanning is heuristic (comments/strings/brackets aware, no full
   parser). Unusual macro-heavy code can confuse it.
-- If the function is already declared somewhere, *new* refuses rather than
-  generating a definition from the existing declaration.
+- On a call to a function that is already declared somewhere, *new* refuses;
+  put the cursor on the declaration instead to generate its definition.
 
 ## Tests
 

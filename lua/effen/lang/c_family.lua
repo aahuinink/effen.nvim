@@ -19,6 +19,9 @@
 --   ensure_include(buf, header_path)
 --   includes(lines, dir)                 -> absolute paths of local includes
 --   extensions()                         -> file extensions of the language
+--   is_header(path) / source_candidates(header_path)
+--   declaration_at(buf, row, col)        -> declaration under the cursor | nil
+--   definition_proto(decl_proto)         -> prototype text for its definition
 --   wrap_analyze / wrap_build / wrap_find      (see lang/c_wrap.lua)
 local lex = require("effen.lang.c_lex")
 local util = require("effen.util")
@@ -587,12 +590,104 @@ function F.new(spec)
     return vim.fn.fnamemodify(path, ":r") .. "." .. ext
   end
 
+  --- Source extensions to try for files next to `path`, most used in its
+  --- directory first (`.h` files are `cpp` by default even in C projects).
+  local function source_exts_near(path)
+    local exts = vim.list_extend(vim.list_extend({}, spec.source_exts), { "c", "cpp", "cc", "cxx" })
+    local count, order, seen = {}, {}, {}
+    for _, e in ipairs(exts) do
+      if not seen[e] then
+        seen[e] = true
+        order[#order + 1] = e
+        count[e] = 0
+      end
+    end
+    local dir = vim.fs.dirname(util.abspath(path))
+    if vim.fn.isdirectory(dir) == 1 then
+      for name, kind in vim.fs.dir(dir) do
+        local e = name:match("%.([^.]+)$")
+        if kind == "file" and e and count[e] then
+          count[e] = count[e] + 1
+        end
+      end
+    end
+    local rank = {}
+    for i, e in ipairs(order) do
+      rank[e] = i
+    end
+    table.sort(order, function(a, b)
+      if count[a] ~= count[b] then
+        return count[a] > count[b]
+      end
+      return rank[a] < rank[b]
+    end)
+    return order
+  end
+
   function L.default_source(path, fname)
     local ext = vim.fn.fnamemodify(path, ":e")
     if ext == "" or vim.tbl_contains(spec.header_exts, ext) then
-      ext = spec.source_exts[1]
+      ext = source_exts_near(path)[1]
     end
     return vim.fs.joinpath(vim.fs.dirname(path), fname .. "." .. ext)
+  end
+
+  function L.is_header(path)
+    return vim.tbl_contains(spec.header_exts, vim.fn.fnamemodify(path, ":e"))
+  end
+
+  --- Possible same-named source files of a header (this language first).
+  function L.source_candidates(path)
+    local root = vim.fn.fnamemodify(path, ":r")
+    local out = {}
+    for _, ext in ipairs(source_exts_near(path)) do
+      out[#out + 1] = root .. "." .. ext
+    end
+    return out
+  end
+
+  --- The top-level function declaration (prototype) containing (row, col),
+  --- with `name_row`/`name_col` of its name.
+  function L.declaration_at(buf, row, col)
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    for _, d in ipairs(F.declarations(lines)) do
+      local after_start = row > d.srow or (row == d.srow and col >= d.scol)
+      local before_end = row < d.erow or (row == d.erow and col <= d.ecol)
+      if after_start and before_end then
+        for r = d.srow, d.erow do
+          local from = r == d.srow and d.scol + 1 or 1
+          local s = lines[r + 1]:find("%f[%w_~]" .. vim.pesc(d.proto.base) .. "%s*%(", from)
+          if s then
+            d.name_row, d.name_col = r, s - 1
+            break
+          end
+        end
+        d.name_row = d.name_row or d.srow
+        d.name_col = d.name_col or d.scol
+        return d
+      end
+    end
+  end
+
+  --- Prototype for the definition of a declaration: unnamed parameters get
+  --- names, default arguments and `extern` are dropped.
+  function L.definition_proto(p)
+    local q = vim.deepcopy(p)
+    for i, prm in ipairs(q.params) do
+      if not prm.name and prm.type ~= "void" and prm.type ~= "..." then
+        local nm = "arg" .. i
+        local t = prm.type
+        local fp = t:find("%(%s*[%*&^]%s*%)")
+        if fp then -- unnamed function pointer: void (*)(int)
+          prm.text = t:gsub("%(%s*([%*&^])%s*%)", "(%1" .. nm .. ")", 1)
+        else
+          local base, arr = t:match("^(.-)%s*(%[.*%])$")
+          prm.text = base and (join_type_name(base, nm) .. arr) or join_type_name(t, nm)
+        end
+        prm.name = nm
+      end
+    end
+    return F.render_proto(q, { defaults = false, prefix = q.prefix:gsub("^extern%s+", "") })
   end
 
   function L.extensions()

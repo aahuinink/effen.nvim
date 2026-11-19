@@ -1,0 +1,95 @@
+-- `new` on a function declaration: create its definition.
+local ff = require("effen")
+ff.setup({})
+
+local dir = vim.fn.tempname()
+vim.fn.mkdir(dir, "p")
+local function write(name, lines)
+  vim.fn.writefile(lines, dir .. "/" .. name)
+end
+local function read(name)
+  return vim.fn.readfile(dir .. "/" .. name)
+end
+local function open(name, row, col)
+  vim.cmd("only")
+  vim.cmd("edit! " .. dir .. "/" .. name)
+  vim.bo.expandtab, vim.bo.shiftwidth = true, 4
+  vim.api.nvim_win_set_cursor(0, { row, col })
+  return vim.api.nvim_get_current_buf()
+end
+local function lines(buf)
+  return vim.api.nvim_buf_get_lines(buf or 0, 0, -1, false)
+end
+local function has(ls, s)
+  return vim.tbl_contains(ls, s)
+end
+
+describe("new from a declaration", function()
+  it("forward declaration in a source file: definition appended, declaration kept", function()
+    write("a.c", { "static int twice(int, const char *name = 0);", "", "int main(void) {", "  return twice(1, 0);", "}" })
+    local buf = open("a.c", 1, 12)
+    ff.new({ keys = "a", confirm = false })
+    local ls = lines(buf)
+    eq("static int twice(int, const char *name = 0);", ls[1])
+    eq({ "static int twice(int arg1, const char *name)", "{", "    ", "}" }, vim.list_slice(ls, #ls - 3, #ls))
+    eq(#ls - 1, vim.api.nvim_win_get_cursor(0)[1]) -- in the body
+    eq(1, vim.api.nvim_get_mark("F", {})[1]) -- marker on the declaration
+  end)
+
+  it("editing the prototype in the prompt updates the declaration", function()
+    write("b.c", { "int scale(int v);", "", "int main(void) { return scale(2); }" })
+    local buf = open("b.c", 1, 0)
+    ff.new({ keys = "al", prototype = "long scale(long v, int factor)" })
+    local ls = lines(buf)
+    eq("long scale(long v, int factor);", ls[1])
+    eq(true, has(ls, "long scale(long v, int factor)"))
+  end)
+
+  it("in a header: the definition goes to the same-named source file", function()
+    write("m.h", { "#ifndef M_H", "#define M_H", "", "double area(double w, double h);", "", "#endif" })
+    write("m.c", { "#include <math.h>" })
+    open("m.h", 4, 8)
+    ff.new({ keys = "a", confirm = false })
+    eq(dir .. "/m.c", vim.api.nvim_buf_get_name(0))
+    local c = read("m.c")
+    eq('#include "m.h"', c[2])
+    eq(true, has(c, "double area(double w, double h)"), vim.inspect(c))
+  end)
+
+  it("in a header without a source file: `n` prompts (here: given) a new file", function()
+    write("n.h", { "#pragma once", "void reset(void);" })
+    open("n.h", 2, 5)
+    ff.new({ keys = "nl", confirm = false, source = dir .. "/reset.c" })
+    local c = read("reset.c")
+    eq('#include "n.h"', c[1])
+    eq(true, has(c, "void reset(void)"), vim.inspect(c))
+  end)
+
+  it("`h` moves a forward declaration into the header", function()
+    write("p.c", { "#include <stdio.h>", "", "int sum(int a, int b);", "", "int main(void) { return sum(1, 2); }" })
+    local buf = open("p.c", 3, 4)
+    ff.new({ keys = "hal", confirm = false, header = dir .. "/p.h" })
+    local ls = lines(buf)
+    eq(false, has(ls, "int sum(int a, int b);"), vim.inspect(ls))
+    eq(true, has(ls, '#include "p.h"'), vim.inspect(ls))
+    eq(true, has(ls, "int sum(int a, int b)"))
+    eq(true, has(read("p.h"), "int sum(int a, int b);"))
+  end)
+
+  it("refuses when the function is already defined", function()
+    write("q.c", { "int one(void);", "", "int one(void)", "{", "    return 1;", "}" })
+    local buf = open("q.c", 1, 5)
+    local before = lines(buf)
+    ff.new({ keys = "a", confirm = false })
+    eq(before, lines(buf))
+  end)
+
+  it("a call inside a body still uses the call flow", function()
+    write("r.c", { "int main(void) {", "  int n = 1;", "  bump(n);", "  return 0;", "}" })
+    local buf = open("r.c", 3, 3)
+    ff.new({ keys = "al", prototype = "void bump(int n)" })
+    eq("void bump(int n);", lines(buf)[1])
+  end)
+end)
+
+vim.fn.delete(dir, "rf")

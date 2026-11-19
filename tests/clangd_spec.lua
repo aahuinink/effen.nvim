@@ -188,6 +188,26 @@ describe("clangd wrap", function()
   end)
 end)
 
+describe("clangd new from declaration", function()
+  it("a lone declaration is not mistaken for its own definition", function()
+    write("decl.c", { "int lonely(int x);", "", "int main(void) { return lonely(1); }" })
+    vim.cmd("only")
+    vim.cmd("edit " .. dir .. "/decl.c")
+    local dbuf = vim.api.nvim_get_current_buf()
+    vim.lsp.start({ name = "clangd", cmd = { clangd }, root_dir = dir })
+    vim.wait(20000, function()
+      return lsp.hover(dbuf, 0, 5) ~= nil
+    end, 200)
+    vim.api.nvim_win_set_cursor(0, { 1, 5 })
+    ff.new({ keys = "al", confirm = false })
+    eq(true, contains(vim.api.nvim_buf_get_lines(dbuf, 0, -1, false), "int lonely(int x)"))
+    vim.api.nvim_win_set_cursor(0, { 1, 5 })
+    local before = vim.api.nvim_buf_get_lines(dbuf, 0, -1, false)
+    ff.new({ keys = "al", confirm = false }) -- now defined: refused
+    eq(before, vim.api.nvim_buf_get_lines(dbuf, 0, -1, false))
+  end)
+end)
+
 for _, c in ipairs(vim.lsp.get_clients()) do
   c:stop(true)
 end
